@@ -2,23 +2,25 @@ import discord
 from discord.ext import commands
 import asyncio
 import logging
+import os
 from tqdm import tqdm
 from rich.logging import RichHandler
 from rich import traceback
 from gemini import gemini_ai
 
+# 設置環境變數以抑制 gRPC 警告
+os.environ['GRPC_PYTHON_LOG_LEVEL'] = '0'
+os.environ['GRPC_VERBOSITY'] = 'ERROR'
+
 # 設定日誌
 traceback.install(show_locals=True)
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[RichHandler()]
 )
 
-# 載入 prompt
-with open('prompt.txt', 'r', encoding='utf-8') as f:
-    p = f.read()
-gemini = gemini_ai(prompt=p)
 
 class DiscordBot:
     """Discord Bot 類別"""
@@ -28,12 +30,18 @@ class DiscordBot:
         self.owner_id = owner_id
         
         # 初始化 AI
-        self.ai = gemini_ai()
+        with open('prompt.txt', 'r', encoding='utf-8') as f:
+            p = f.read()
+        self.ai = gemini_ai(prompt=p)
 
         # 設定 bot
         intents = discord.Intents.all()
         self.bot = commands.Bot(command_prefix='!', intents=intents)
         self.is_ready = asyncio.Event()
+        
+        # 初始化訊息佇列
+        self.message_queue = asyncio.Queue()
+        self.processing = False
         
         # 註冊指令和事件
         self.setup_commands()
@@ -112,15 +120,19 @@ class DiscordBot:
         @self.bot.command(name="exit")
         async def exit_command(ctx):
             """退出機器人"""
+            # 檢查是否為機器人擁有者
             if ctx.author.id != self.owner_id:
-                await ctx.send("只有機器人擁有者可以使用此指令")
+                await ctx.send(f"{ctx.author.mention} 抱歉，只有機器人擁有者才能使用此指令！")
                 return
                 
             # 發送確認訊息
             confirm_msg = await ctx.send("你要離開我了嗎(｡•́︿•̀｡)(Y/N)")
             
             def check(m):
-                return m.author == ctx.author and m.channel == ctx.channel and m.content.upper() in ['Y', 'N']
+                # 確保只有原始發送者可以回應，且必須在同一個頻道
+                return (m.author.id == self.owner_id and 
+                        m.channel == ctx.channel and 
+                        m.content.upper() in ['Y', 'N'])
             
             try:
                 # 等待用戶回應
@@ -135,11 +147,12 @@ class DiscordBot:
                     except:
                         pass
                     # 發送告別訊息並關閉
-                    await ctx.send('ヾ(￣▽￣)Bye~Bye~')
+                    await ctx.send('下次見啦！ヾ(￣▽￣)Bye~Bye~')
+                    logging.info(f'機器人被擁有者 {ctx.author.name} 關閉')
                     await self.bot.close()
                 else:
                     # 如果用戶取消
-                    await ctx.send('已取消退出')
+                    await ctx.send('已取消關閉機器人')
                     try:
                         await confirm_msg.delete()
                         await msg.delete()
@@ -148,15 +161,47 @@ class DiscordBot:
             
             except asyncio.TimeoutError:
                 # 如果超時
-                await ctx.send('超時未回應，已取消退出')
+                await ctx.send('超過 30 秒未回應，已自動取消關閉')
                 try:
                     await confirm_msg.delete()
                 except:
                     pass
                 
+    async def process_message_queue(self):
+        """處理訊息佇列"""
+        self.processing = True
+        while True:
+            try:
+                # 從佇列中取出訊息
+                message, content = await self.message_queue.get()
+                
+                try:
+                    # 調用 Gemini API
+                    response = self.ai.chat(content)
+                    logging.info(f'回覆：{response}')
+                    
+                    # 發送回覆
+                    await message.channel.send(f'{message.author.mention} {response}')
+                    
+                except Exception as e:
+                    logging.error(f'處理訊息時發生錯誤：{e}')
+                    await message.channel.send(f'{message.author.mention} 抱歉，我現在無法正確回應，請稍後再試。')
+                
+                finally:
+                    # 標記任務完成
+                    self.message_queue.task_done()
+                    # 等待一小段時間再處理下一條訊息
+                    await asyncio.sleep(1)
+                    
+            except Exception as e:
+                logging.error(f'佇列處理器發生錯誤：{e}')
+                await asyncio.sleep(5)  # 發生錯誤時等待較長時間
+
     async def setup_hook(self):
         """當 bot 準備好時會被呼叫"""
         logging.info('Bot setup hook 已執行')
+        # 啟動訊息佇列處理器
+        asyncio.create_task(self.process_message_queue())
         
     async def on_ready(self):
         """當 bot 準備好時觸發"""
@@ -177,7 +222,25 @@ class DiscordBot:
 
     async def close(self):
         """關閉 bot"""
-        await self.bot.close()
+        try:
+            # 停止處理新的訊息
+            self.processing = False
+            
+            # 等待所有佇列中的訊息處理完成
+            if hasattr(self, 'message_queue'):
+                if not self.message_queue.empty():
+                    await self.message_queue.join()
+            
+            # 關閉 Gemini 的聊天會話
+            if hasattr(self, 'ai'):
+                self.ai.cleanup()
+                await asyncio.sleep(1)  # 給予時間清理
+            
+            # 關閉 Discord bot
+            await self.bot.close()
+            
+        except Exception as e:
+            logging.error(f"關閉時發生錯誤: {e}")
 
     async def send_message(self, message: str, user_mention: str = None):
         """發送訊息到指定頻道"""
@@ -260,11 +323,5 @@ class DiscordBot:
                 await message.channel.send(f'{message.author.mention} ヾ(￣▽￣)Bye~Bye~')
                 await self.bot.close()
             else:
-                try:
-                    response = gemini.chat(content)
-                    logging.info(f'回覆：{response}')
-                    # 在回應前加上 @ 使用者
-                    await message.channel.send(f'{message.author.mention} {response}')
-                except Exception as e:
-                    logging.error(f'生成回覆時發生錯誤：{e}')
-                    await message.channel.send(f'{message.author.mention} 抱歉，我現在無法正確回應，請稍後再試。')
+                # 將訊息加入佇列
+                await self.message_queue.put((message, content))
