@@ -75,7 +75,17 @@ class gemini_ai:
         
         for attempt in range(max_retries * len(API_KEYS)):
             try:
+                # 計算輸入文本的 token 數量
+                input_token_count = self.model.count_tokens(text).total_tokens
+                logging.info(f"輸入文本的 token 數量: {input_token_count}")
+                
                 response = self.chat_session.send_message(text)
+                
+                # 計算回應文本的 token 數量
+                output_token_count = self.model.count_tokens(response.text).total_tokens
+                logging.info(f"回應文本的 token 數量: {output_token_count}")
+                logging.info(f"本次對話總 token 數量: {input_token_count + output_token_count}")
+                
                 self.history.append(
                     {
                         'role':'user',
@@ -105,8 +115,12 @@ class gemini_ai:
                     return "抱歉，我現在遇到了一些技術問題，請稍後再試。"
     
     def get_history(self):
+        total_tokens = 0
         for history in self.history:
             logging.info(f"歷史記錄: {history['parts'][0]}")
+            total_tokens += history.get('tokens', 0)
+        logging.info(f"歷史記錄總 token 數量: {total_tokens}")
+        return total_tokens
 
     def cleanup(self):
         """清理資源並關閉連接"""

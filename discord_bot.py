@@ -117,6 +117,106 @@ class DiscordBot:
                 logging.error(f'清除訊息時發生錯誤：{e}')
                 await ctx.send(f'{ctx.author.mention} 清除訊息時發生錯誤')
                 
+        @self.bot.command(name="token_test")
+        async def token_test(ctx, message_count: int = 100, *, test_message: str = "這是一個測試訊息"):
+            """測試不同數量歷史訊息的 token 消耗
+            :param message_count: 要測試的最大歷史訊息數量，預設100
+            :param test_message: 測試用的訊息內容
+            """
+            if message_count <= 0 or message_count > 100:
+                await ctx.send("訊息數量必須在 1 到 100 之間")
+                return
+                
+            # 創建測試用的 AI 實例
+            with open('prompt.txt', 'r', encoding='utf-8') as f:
+                p = f.read()
+            test_ai = gemini_ai(prompt=p)
+            
+            # 準備進度訊息
+            progress_msg = await ctx.send("正在進行測試，請稍候...")
+            
+            # 準備測試結果
+            results = []
+            base_tokens = None
+            
+            try:
+                # 第一次測試（無歷史訊息）
+                input_tokens = test_ai.model.count_tokens(test_message).total_tokens
+                response = test_ai.chat(test_message)
+                response_tokens = test_ai.model.count_tokens(response).total_tokens
+                base_tokens = input_tokens + response_tokens
+                
+                results.append({
+                    'history_count': 0,
+                    'total_tokens': base_tokens,
+                    'increase': 0,
+                    'percentage': 0
+                })
+                
+                # 測試不同數量的歷史訊息
+                test_intervals = [1, 5, 10, 20, 50, 75, 100]  # 測試的歷史訊息數量點
+                test_intervals = [x for x in test_intervals if x <= message_count]
+                
+                for target_count in test_intervals:
+                    if target_count <= len(test_ai.history) // 2:
+                        continue
+                        
+                    # 添加更多歷史訊息直到達到目標數量
+                    while len(test_ai.history) // 2 < target_count:
+                        test_ai.chat(f"這是第 {len(test_ai.history)//2 + 1} 條測試訊息")
+                    
+                    # 計算當前的 token 消耗
+                    history_tokens = sum(test_ai.model.count_tokens(h['parts'][0]).total_tokens 
+                                       for h in test_ai.history)
+                    current_input_tokens = test_ai.model.count_tokens(test_message).total_tokens
+                    current_response = test_ai.chat(test_message)
+                    current_response_tokens = test_ai.model.count_tokens(current_response).total_tokens
+                    
+                    total_tokens = current_input_tokens + current_response_tokens + history_tokens
+                    increase = total_tokens - base_tokens
+                    percentage = ((total_tokens / base_tokens) - 1) * 100
+                    
+                    results.append({
+                        'history_count': target_count,
+                        'total_tokens': total_tokens,
+                        'increase': increase,
+                        'percentage': percentage
+                    })
+                    
+                    # 更新進度
+                    await progress_msg.edit(content=f"測試進度: {target_count}/{message_count} 條歷史訊息")
+                
+                # 創建結果報告
+                embed = discord.Embed(
+                    title="Token 消耗量測試報告",
+                    description=f"測試訊息: {test_message}",
+                    color=discord.Color.blue()
+                )
+                
+                # 基準數據
+                embed.add_field(
+                    name="基準 (無歷史訊息)",
+                    value=f"總 Token: {base_tokens}",
+                    inline=False
+                )
+                
+                # 各個測試點的數據
+                for result in results[1:]:  # 跳過基準數據
+                    embed.add_field(
+                        name=f"歷史訊息數: {result['history_count']}",
+                        value=f"總 Token: {result['total_tokens']}\n"
+                              f"增加量: {result['increase']}\n"
+                              f"增加比例: {result['percentage']:.2f}%",
+                        inline=True
+                    )
+                
+                # 刪除進度訊息並發送結果
+                await progress_msg.delete()
+                await ctx.send(embed=embed)
+                
+            except Exception as e:
+                await progress_msg.edit(content=f"測試過程中發生錯誤: {str(e)}")
+            
         @self.bot.command(name="exit")
         async def exit_command(ctx):
             """退出機器人"""
