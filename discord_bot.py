@@ -8,6 +8,8 @@ from rich.logging import RichHandler
 from rich import traceback
 from gemini import gemini_ai
 from grok import Grok
+import time
+import aiohttp
 
 # 設置環境變數以抑制 gRPC 警告
 os.environ['GRPC_PYTHON_LOG_LEVEL'] = '0'
@@ -127,17 +129,19 @@ class DiscordBot:
                 
         @self.bot.command(name="token_test")
         async def token_test(ctx, message_count: int = 100, *, test_message: str = "這是一個測試訊息"):
-            """測試不同數量歷史訊息的 token 消耗
-            :param message_count: 要測試的最大歷史訊息數量，預設100
-            :param test_message: 測試用的訊息內容
-            """
+            """測試不同數量歷史訊息的 token 消耗"""
             if message_count <= 0 or message_count > 100:
                 await ctx.send("訊息數量必須在 1 到 100 之間")
                 return
                 
             # 創建測試用的 AI 實例
-            with open('prompt.txt', 'r', encoding='utf-8') as f:
-                p = f.read()
+            try:
+                with open('./prompt/特斯拉.txt', 'r', encoding='utf-8') as f:
+                    p = f.read()
+            except FileNotFoundError:
+                p = "使用繁體中文進行回覆"
+                logging.warning("找不到 prompt 文件，使用預設 prompt")
+                
             test_ai = gemini_ai(prompt=p)
             
             # 準備進度訊息
@@ -225,6 +229,57 @@ class DiscordBot:
             except Exception as e:
                 await progress_msg.edit(content=f"測試過程中發生錯誤: {str(e)}")
             
+        @self.bot.command(name="ping")
+        async def ping(ctx):
+            """測量各種延遲的平均值（10次測量）"""
+            msg = await ctx.send("正在測量延遲中...")
+            
+            # 初始化延遲列表
+            bot_latencies = []
+            api_latencies = []
+            ws_latencies = []
+            
+            # 進行10次測量
+            for _ in range(10):
+                # Bot 回應延遲
+                before = time.monotonic()
+                tmp_msg = await ctx.send(".")
+                bot_latency = (time.monotonic() - before) * 1000
+                await tmp_msg.delete()
+                bot_latencies.append(bot_latency)
+                
+                # API 延遲
+                api_before = time.monotonic()
+                async with aiohttp.ClientSession() as session:
+                    async with session.get('https://discord.com/api/v10/gateway') as resp:
+                        api_latency = (time.monotonic() - api_before) * 1000
+                api_latencies.append(api_latency)
+                
+                # WebSocket 延遲
+                ws_latencies.append(self.bot.latency * 1000)
+                
+                # 短暫延遲以避免速率限制
+                await asyncio.sleep(0.5)
+            
+            # 計算平均值
+            avg_bot = round(sum(bot_latencies) / len(bot_latencies))
+            avg_api = round(sum(api_latencies) / len(api_latencies))
+            avg_ws = round(sum(ws_latencies) / len(ws_latencies))
+            avg_total = round((avg_bot + avg_api + avg_ws) / 3)
+            
+            # 建立嵌入式訊息
+            embed = discord.Embed(title="延遲測試報告", color=discord.Color.blue())
+            
+            # 使用 embed.description 顯示延遲資訊
+            embed.description = (
+                f"**Bot 回應延遲**：{avg_bot}ms\n"
+                f"**API 延遲**：{avg_api}ms\n"
+                f"**網路延遲**：{avg_ws}ms\n"
+                f"**平均延遲**：{avg_total}ms"
+            )
+            
+            await msg.edit(content=None, embed=embed)
+            
         @self.bot.command(name="exit")
         async def exit_command(ctx):
             """退出機器人"""
@@ -232,7 +287,7 @@ class DiscordBot:
             if ctx.author.id != self.owner_id:
                 await ctx.send(f"{ctx.author.mention} 抱歉，只有機器人擁有者才能使用此指令！")
                 return
-                
+            
             # 發送確認訊息
             confirm_msg = await ctx.send("你要離開我了嗎(｡•́︿•̀｡)(Y/N)")
             
@@ -274,25 +329,25 @@ class DiscordBot:
                     await confirm_msg.delete()
                 except:
                     pass
-                
+            
     async def process_message_queue(self):
         """處理訊息佇列"""
         self.processing = True
         while True:
             try:
                 # 從佇列中取出訊息
-                message, content = await self.message_queue.get()
+                message = await self.message_queue.get()
                 
                 try:
                     # 調用 Gemini API
-                    response = self.ai.chat(content)
+                    response = self.ai.chat(message.content)
                     logging.info(f'回覆：{response}')
 
                     # 等待 5 秒
                     logging.info('等待 5 秒後發送回覆...')
                     await asyncio.sleep(5)
                     
-                    # 發送回覆
+                    # 發送回覆到原始頻道
                     await message.channel.send(f'{message.author.mention} {response}')
                     
                 except Exception as e:
@@ -354,26 +409,29 @@ class DiscordBot:
         except Exception as e:
             logging.error(f"關閉時發生錯誤: {e}")
 
-    async def send_message(self, message: str, user_mention: str = None):
+    async def send_message(self, channel, message: str, user_mention: str = None):
         """發送訊息到指定頻道"""
         await self.is_ready.wait()
         try:
+            if not channel:
+                raise ValueError("未提供有效的頻道")
+                
             if user_mention:
                 message = f'{user_mention} {message}'
-            await self.bot.get_channel(CHANNEL_ID).send(message)
-            logging.info(f'已發送訊息：{message}')
+            await channel.send(message)
+            logging.info(f'已發送訊息到頻道 {channel.name}：{message}')
         except Exception as e:
             logging.error(f'發送訊息時發生錯誤：{e}')
             raise
 
-    async def clear(self, channel=None, amount=100):
+    async def clear(self, channel, amount=100):
         """清除指定頻道的所有訊息"""
         await self.is_ready.wait()
         
-        # 如果沒有指定頻道，使用預設頻道
-        channel = channel or self.bot.get_channel(CHANNEL_ID)
-        
         try:
+            if not channel:
+                raise ValueError("未提供有效的頻道")
+            
             # 取得所有訊息
             messages = []
             async for message in channel.history(limit=amount):
@@ -436,4 +494,4 @@ class DiscordBot:
                 await self.bot.close()
             else:
                 # 將訊息加入佇列
-                await self.message_queue.put((message, content))
+                await self.message_queue.put(message)

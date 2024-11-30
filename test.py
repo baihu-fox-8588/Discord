@@ -46,7 +46,7 @@ async def main():
         signal.signal(signal.SIGTERM, handle_shutdown)
         
         # 創建並啟動 bot
-        bot = DiscordBot(token, owner_id, model='grok')
+        bot = DiscordBot(token, owner_id)
         await bot.start()
 
     except KeyboardInterrupt:
@@ -85,7 +85,7 @@ async def 女裝():
                 return
         
         # 發送訊息
-        for _ in range(50):
+        for _ in range(10):
             await channel.send('每日關心 <@1076840902200393759> 今天女裝了嗎？')
             await asyncio.sleep(0.5)  # 每次發送訊息的間隔時間為 0.5 秒
 
