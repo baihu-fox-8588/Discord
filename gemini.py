@@ -18,9 +18,9 @@ logging.basicConfig(
 
 # API keys list
 API_KEYS = [
-    'AIzaSyAt5lkU9AVAeN6R0B12sNKLKIjKU26_QHE',
-    'AIzaSyBDRyKIvpsXKYVyc1DlXv7OQK3zSDNoNTQ',
-    'AIzaSyCv_CLB_OITWQkHywYUV4TdXOsRMa--q9A'
+    os.getenv('GEMINI_API_KEY_1'),
+    os.getenv('GEMINI_API_KEY_2'),
+    os.getenv('GEMINI_API_KEY_3')
 ]
 
 def cleanup_genai():
@@ -70,49 +70,61 @@ class gemini_ai:
         )
 
     def chat(self, text: str):
-        max_retries = 3
-        retry_delay = 2  # 秒
+        max_retries = 9
+        retry_sets = 2  # 嘗試兩組，每組9次
+        retry_delay = 2  # 每次重試間隔2秒
+        set_delay = 5   # 每組重試間隔5秒
         
-        for attempt in range(max_retries * len(API_KEYS)):
-            try:
-                # 計算輸入文本的 token 數量
-                input_token_count = self.model.count_tokens(text).total_tokens
-                logging.info(f"輸入文本的 token 數量: {input_token_count}")
-                
-                response = self.chat_session.send_message(text)
-                
-                # 計算回應文本的 token 數量
-                output_token_count = self.model.count_tokens(response.text).total_tokens
-                logging.info(f"回應文本的 token 數量: {output_token_count}")
-                logging.info(f"本次對話總 token 數量: {input_token_count + output_token_count}")
-                
-                self.history.append(
-                    {
-                        'role':'user',
-                        'parts':[text],
-                    }                
-                )
-                self.history.append(
-                    {
-                        'role':'model',
-                        'parts':[response.text]
-                    }
-                )
-                return response.text
-                
-            except ResourceExhausted as e:
-                logging.error(f"API 配額已用完: {e}")
-                self._rotate_api_key()
-                
-            except Exception as e:
-                if attempt < max_retries * len(API_KEYS) - 1:
-                    logging.warning(f"嘗試 {attempt + 1}/{max_retries * len(API_KEYS)} 失敗: {e}")
-                    import time
-                    time.sleep(retry_delay)
-                    continue
-                else:
-                    logging.error(f"在調用 Gemini API 時發生錯誤: {e}")
-                    return "抱歉，我現在遇到了一些技術問題，請稍後再試。"
+        for set_attempt in range(retry_sets):
+            for attempt in range(max_retries):
+                try:
+                    # 計算輸入文本的 token 數量
+                    input_token_count = self.model.count_tokens(text).total_tokens
+                    logging.info(f"輸入文本的 token 數量: {input_token_count}")
+                    
+                    response = self.chat_session.send_message(text)
+                    
+                    # 計算回應文本的 token 數量
+                    output_token_count = self.model.count_tokens(response.text).total_tokens
+                    logging.info(f"回應文本的 token 數量: {output_token_count}")
+                    logging.info(f"本次對話總 token 數量: {input_token_count + output_token_count}")
+                    
+                    self.history.append(
+                        {
+                            'role':'user',
+                            'parts':[text],
+                        }                
+                    )
+                    self.history.append(
+                        {
+                            'role':'model',
+                            'parts':[response.text]
+                        }
+                    )
+                    return response.text
+                    
+                except ResourceExhausted as e:
+                    logging.error(f"API 配額已用完: {e}")
+                    self._rotate_api_key()
+                    
+                except Exception as e:
+                    current_attempt = set_attempt * max_retries + attempt + 1
+                    total_attempts = max_retries * retry_sets
+                    
+                    if current_attempt < total_attempts:
+                        logging.warning(f"嘗試 {current_attempt}/{total_attempts} 失敗: {e}")
+                        import time
+                        
+                        # 如果完成一組9次嘗試，等待5秒
+                        if attempt == max_retries - 1 and set_attempt < retry_sets - 1:
+                            logging.info(f"完成第 {set_attempt + 1} 組嘗試，等待 {set_delay} 秒後繼續...")
+                            time.sleep(set_delay)
+                        else:
+                            time.sleep(retry_delay)
+                        continue
+                    else:
+                        logging.error(f"在調用 Gemini API 時發生錯誤: {e}")
+                        return "抱歉，我現在遇到了一些技術問題，請稍後再試。"
     
     def get_history(self):
         total_tokens = 0

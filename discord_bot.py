@@ -7,6 +7,7 @@ from tqdm import tqdm
 from rich.logging import RichHandler
 from rich import traceback
 from gemini import gemini_ai
+from grok import Grok
 
 # 設置環境變數以抑制 gRPC 警告
 os.environ['GRPC_PYTHON_LOG_LEVEL'] = '0'
@@ -24,15 +25,24 @@ logging.basicConfig(
 
 class DiscordBot:
     """Discord Bot 類別"""
-    def __init__(self, token, owner_id=None):
+    def __init__(self, token, owner_id = None, model: str = 'Gemini'):
         """初始化 Discord Bot"""
         self.token = token
         self.owner_id = owner_id
         
         # 初始化 AI
-        with open('prompt.txt', 'r', encoding='utf-8') as f:
+        with open('./prompt/特斯拉.txt', 'r', encoding='utf-8') as f:
             p = f.read()
-        self.ai = gemini_ai(prompt=p)
+        
+        if model.lower() == 'gemini':
+            self.ai = gemini_ai(prompt=p)
+
+        elif model.lower() == 'grok':
+            self.ai = Grok(prompt=p)
+
+        else:
+            logging.warning(f"未知模型：{model}")
+            self.ai = gemini_ai(prompt=p)
 
         # 設定 bot
         intents = discord.Intents.all()
@@ -73,29 +83,27 @@ class DiscordBot:
         async def on_message_edit(before, after):
             """當訊息被編輯時"""
             if before.author != self.bot.user:  # 忽略機器人自己的訊息
-                logging.info(f'訊息被編輯 - 頻道: {before.channel.name} | 作者: {before.author.name}')
-                logging.info(f'原始內容: {before.content}')
-                logging.info(f'修改後內容: {after.content}')
+                logging.debug(f'訊息被編輯 - 頻道: {before.channel.name} | 作者: {before.author.name}')
 
         @self.bot.event
         async def on_member_join(member):
             """當新成員加入伺服器時"""
-            logging.info(f'新成員加入 - 伺服器: {member.guild.name} | 成員: {member.name}')
+            logging.debug(f'新成員加入 - {member.name}')
 
         @self.bot.event
         async def on_member_remove(member):
             """當成員離開伺服器時"""
-            logging.info(f'成員離開 - 伺服器: {member.guild.name} | 成員: {member.name}')
+            logging.debug(f'成員離開 - {member.name}')
 
         @self.bot.event
         async def on_guild_channel_create(channel):
             """當新頻道被創建時"""
-            logging.info(f'新頻道創建 - 伺服器: {channel.guild.name} | 頻道: {channel.name}')
+            logging.debug(f'新頻道創建 - {channel.name}')
 
         @self.bot.event
         async def on_guild_channel_delete(channel):
             """當頻道被刪除時"""
-            logging.info(f'頻道被刪除 - 伺服器: {channel.guild.name} | 頻道: {channel.name}')
+            logging.debug(f'頻道被刪除 - {channel.name}')
 
         # 註冊斜線指令
         @self.bot.command(name="hello")
@@ -279,6 +287,10 @@ class DiscordBot:
                     # 調用 Gemini API
                     response = self.ai.chat(content)
                     logging.info(f'回覆：{response}')
+
+                    # 等待 5 秒
+                    logging.info('等待 5 秒後發送回覆...')
+                    await asyncio.sleep(5)
                     
                     # 發送回覆
                     await message.channel.send(f'{message.author.mention} {response}')
