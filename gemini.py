@@ -3,6 +3,7 @@ from google.api_core.exceptions import ResourceExhausted
 import logging
 import os
 from rich.logging import RichHandler
+from dotenv import load_dotenv
 import atexit
 
 # 設置環境變數以抑制 gRPC 警告
@@ -16,7 +17,8 @@ logging.basicConfig(
     handlers=[RichHandler()]
 )
 
-# API keys list
+# 載入環境變數
+load_dotenv()
 API_KEYS = [
     os.getenv('GEMINI_API_KEY_1'),
     os.getenv('GEMINI_API_KEY_2'),
@@ -180,5 +182,6 @@ class gemini_ai:
                 self.chat_session = None
             if hasattr(self, 'model'):
                 self.model = None
+            logging.info("已關閉 Gemini AI")
         except Exception as e:
             logging.error(f"清理 Gemini 資源時發生錯誤: {e}")

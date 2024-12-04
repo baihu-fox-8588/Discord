@@ -91,6 +91,7 @@ class Grok:
             self.messages.clear()
             if hasattr(self, 'client'):
                 self.client = None
+            logging.info("已關閉 Grok AI")
         except Exception as e:
             logging.error(f"清理資源時發生錯誤: {e}")
 
